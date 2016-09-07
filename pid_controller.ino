@@ -297,7 +297,7 @@ void LCD_active_time_left(int time_left)
   lcd.setCursor(0,1);
   lcd.print("T: ");
   lcd.print(time_left, DEC);
-  lcd.print(" M");
+  lcd.print("S");
 }
 
 //----------------------------------------------------------------------------------
@@ -321,10 +321,16 @@ int pid_current_state = PID_IDLE;
 //PID state machine's set state from UI:
 int pid_set_state = PID_IDLE;
 
+//Current PID stage number:
+unsigned char i = 0;
+
+//PID cycle start time in ms:
+unsigned long pid_cycle_start_time_ms;
+
 //PID controller's state machine:
 void PID_state_machine()
 {
-  static unsigned char i = 0;
+  //static unsigned char i = 0;
   static unsigned long windowStartTime = 0;
   static unsigned long stage_end_time = 0;
   static unsigned long pid_sample_dly = 0;
@@ -425,6 +431,9 @@ void PID_state_machine()
 
 #define UI_START_BUTTON_PRESS_DLY_MS    3000
 
+//ACTIVE state status switxh timeout in ms:
+#define UI_ACTIVE_SWITCH_TIMEOUT_MS     5000
+
 //User interface state machine's states:
 enum
 {
@@ -450,10 +459,14 @@ int ui_current_state = IDLE_STATUS;
 void UI_state_machine()
 {  
   char key = 0;
+  
   static unsigned long time_dly = 0;
-
+  static unsigned long active_status_switch_dly = 0;
+  
   static int cur_stage_num = 0;
 
+  unsigned long pid_cycle_time_left_ms = 0;
+  
   //Serial.println("Executing UI");
   
   switch (pid_current_state)
@@ -484,6 +497,8 @@ void UI_state_machine()
           {
             ui_current_state = ACTIVE_STATUS;
             pid_set_state = PID_ACTIVE;
+            active_status_switch_dly = millis();
+            pid_cycle_start_time_ms = millis();
           }
         }
         else
@@ -727,23 +742,58 @@ void UI_state_machine()
       }
       break;
     case PID_ACTIVE: //PID controller is in active state
+      if (keypad.getKey() == '*')
+      {
+        ui_current_state = IDLE_STATUS;
+        pid_set_state = PID_IDLE;
+      }
       switch (ui_current_state)
       {
       case ACTIVE_STATUS:
         LCD_active_status();
-        if (keypad.getKey() == '*')
+        if ((millis() - active_status_switch_dly) > UI_ACTIVE_SWITCH_TIMEOUT_MS)
         {
-          ui_current_state = IDLE_STATUS;
-          pid_set_state = PID_IDLE;
+          ui_current_state = ACTIVE_CUR_TEMP;
+          active_status_switch_dly = millis();
         }
         break;
       case ACTIVE_CUR_TEMP:
+        LCD_active_cur_temp((int) Input);
+        if ((millis() - active_status_switch_dly) > UI_ACTIVE_SWITCH_TIMEOUT_MS)
+        {
+          ui_current_state = ACTIVE_SETPOINT_TEMP;
+          active_status_switch_dly = millis();
+        }
       break;
       case ACTIVE_SETPOINT_TEMP:
+        LCD_active_setpoint_temp((int) Setpoint);
+        if ((millis() - active_status_switch_dly) > UI_ACTIVE_SWITCH_TIMEOUT_MS)
+        {
+          ui_current_state = ACTIVE_STAGE_STATUS;
+          active_status_switch_dly = millis();
+        }
         break;
       case ACTIVE_STAGE_STATUS:
+        LCD_active_profile_stage_status(i+1, temp_profile.stage_num);
+        if ((millis() - active_status_switch_dly) > UI_ACTIVE_SWITCH_TIMEOUT_MS)
+        {
+          ui_current_state = ACTIVE_TIME_LEFT;
+          active_status_switch_dly = millis();
+        }
         break;
       case ACTIVE_TIME_LEFT:
+        //calculate cycle time left:
+        for (unsigned int j=0; j<temp_profile.stage_num; j++)
+        {
+          pid_cycle_time_left_ms += temp_profile.temp_stage_arr[j].duration_min * 60 * 1000;
+        }
+        pid_cycle_time_left_ms -= millis() - pid_cycle_start_time_ms;
+        LCD_active_time_left((int)(pid_cycle_time_left_ms/1000));
+        if ((millis() - active_status_switch_dly) > UI_ACTIVE_SWITCH_TIMEOUT_MS)
+        {
+          ui_current_state = ACTIVE_STATUS;
+          active_status_switch_dly = millis();
+        }
         break;
       default:
         ui_current_state = ACTIVE_STATUS;
